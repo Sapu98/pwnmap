@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Wi-Fi Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .leaflet-container { background: #0b0f17; }
+    .leaflet-control-zoom, .leaflet-control-attribution { display: none !important; }
+
+    /* popup dark */
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+      background: #1f2937 !important; color: #e5e7eb !important;
+      box-shadow: 0 10px 25px rgba(0,0,0,.45) !important;
+      border-radius: 10px !important; border: 1px solid #374151;
+      max-width: none !important;
+    }
+    .leaflet-popup-content {
+      margin: 10px 12px !important;
+      width: fit-content !important;
+      white-space: nowrap !important;
+    }
+
+    /* icone router animate */
+    .custom-icon svg { display:block; margin:auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,.35)); }
+    .wifi-arc { opacity: .0; }
+    @keyframes wifiRise {
+      0%   { opacity: 0; transform: translateY(6px); }
+      30%  { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-6px); }
+    }
+    .animate-wifi .wifi-arc { animation: wifiRise 1.6s ease-in-out infinite; transform-origin: center; }
+    .animate-wifi .wifi-arc.arc2 { animation-delay: .18s; }
+    .animate-wifi .wifi-arc.arc3 { animation-delay: .36s; }
+
+    /* sidebar */
+    .sidebar { width: 320px; }
+    @media (max-width: 1024px) { .sidebar { width: 300px; } }
+    @media (max-width: 768px)  { .sidebar { width: 100%; position:absolute; z-index:1000; } }
+
+    .recent-item { transition: background .15s ease; }
+    .recent-item:hover { background: #374151; }
+    .badge { font-size: 10px; padding: 2px 6px; border-radius: 9999px; }
+
+    /* spider legs draw/undraw animation */
+    .spider-leg { transition: stroke-dashoffset 220ms ease; }
+
+    /* "pill" password */
+    .pwd-pill {
+      cursor: pointer;
+      user-select: none;
+      background: #0b1220;
+      border: 1px solid #475569;
+      border-radius: 6px;
+      padding: 4px 8px;
+      display: inline-block;
+    }
+    .pwd-pill.copied { outline: 2px solid rgba(34,197,94,.5); }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-200 flex">
+
+  <!-- Pulsante riapertura sidebar (solo mobile) -->
+  <button id="reopenSidebar" class="fixed top-3 left-3 z-[1100] px-2 py-1 bg-gray-700 rounded shadow lg:hidden hidden">☰</button>
+
+  <!-- Sidebar -->
+  <div id="sidebar" class="sidebar bg-gray-800 p-4 space-y-4 flex flex-col">
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-semibold">Wi-Fi Map</h1>
+      <button id="toggleSidebar" class="lg:hidden px-2 py-1 bg-gray-700 rounded">☰</button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-2">
+      <button id="btnSync" class="col-span-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded">
+        Sync WPA-SEC
+      </button>
+
+      <label class="flex items-center space-x-2 bg-gray-700/50 rounded px-2 py-1">
+        <input type="checkbox" id="hideUncracked" class="accent-blue-500">
+        <span>Cracked Only</span>
+      </label>
+
+      <label class="flex items-center space-x-2 bg-gray-700/50 rounded px-2 py-1">
+        <input type="checkbox" id="hideEmptyBssid" class="accent-blue-500" checked>
+        <span>Known BSSID Only</span>
+      </label>
+
+      <label class="col-span-2">
+        <span class="text-sm">Basemap</span>
+        <select id="basemap" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded p-2">
+          <option value="dark" selected>Dark</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="sat">Satellite</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="status" class="text-xs text-gray-400"></div>
+
+    <div class="flex-1 min-h-0">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm uppercase tracking-wider text-gray-400">Recenti</h2>
+        <span id="recentCount" class="text-xs text-gray-500"></span>
+      </div>
+      <div id="recentList" class="h-full overflow-y-auto rounded border border-gray-700/60"></div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map" class="flex-1"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+  <script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const LEG_ANIM_MS = 220;
+
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    let suspendLoadingUntil = 0;   // evita reload immediati dopo apertura popup
+    let activePopupMarker = null;  // marker con popup aperto
+    let isDragging = false;        // true durante drag (desktop o touch)
+    let currentSpider = null;      // cluster spiderfied attivo
+
+    // Basemaps
+    const baseLayers = {
+      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'),
+      osm:  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
+      sat:  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}')
+    };
+
+    // Map
+    const map = L.map('map', {
+      center: [41.9, 12.5],
+      zoom: 6,
+      zoomControl: false,
+      attributionControl: false,
+      layers: [baseLayers.dark]
+    });
+
+    // --- Drag / Click map behavior (mobile + desktop) ---
+    map.on('dragstart', () => { isDragging = true; });
+    map.on('dragend',   () => { isDragging = false; });
+
+    // Click sulla mappa: chiude popup e spider SOLO se NON è un drag
+    map.on('click', () => {
+      if (!isDragging) {
+        if (activePopupMarker) {
+          activePopupMarker.closePopup();
+          activePopupMarker = null;
+        }
+        if (currentSpider) {
+          animateLegs(false);
+          setTimeout(() => {
+            try { markers.unspiderfy(); } catch (_) {}
+          }, LEG_ANIM_MS);
+          currentSpider = null;
+        }
+      }
+    });
+
+    // Cluster
+    const markers = L.markerClusterGroup({
+      zoomToBoundsOnClick: false,
+      spiderfyOnEveryClick: false,
+      spiderLegPolylineOptions: { weight: 1, color: '#94a3b8', opacity: 0.9, className: 'spider-leg' }
+    });
+    map.addLayer(markers);
+
+    // Spider: tieni traccia dello spider aperto, non chiuderlo su drag
+    markers.on('spiderfied', (e) => {
+      currentSpider = e.cluster || e.layer || null;
+      animateLegs(true);
+    });
+    markers.on('unspiderfied', () => {
+      currentSpider = null;
+    });
+
+    // Toggle manuale via click sul cluster (no chiusure automatiche su drag)
+    markers.on('clusterclick', (e) => {
+      const c = e.layer;
+      if (currentSpider && currentSpider === c) {
+        // chiudi solo su click sullo stesso cluster
+        animateLegs(false);
+        setTimeout(() => markers.unspiderfy(), LEG_ANIM_MS);
+        currentSpider = null;
+      } else {
+        c.spiderfy();
+        currentSpider = c;
+      }
+    });
+
+    function animateLegs(opening) {
+      const legs = document.querySelectorAll('.spider-leg');
+      legs.forEach(path => {
+        try {
+          const len = path.getTotalLength();
+          path.style.strokeDasharray = String(len);
+          path.style.strokeDashoffset = opening ? String(len) : '0';
+          void path.getBoundingClientRect();
+          path.style.transition = `stroke-dashoffset ${LEG_ANIM_MS}ms ease`;
+          path.style.strokeDashoffset = opening ? '0' : String(len);
+        } catch (_) {}
+      });
+    }
+
+    // UI listeners
+    const statusEl = document.getElementById('status');
+    const sidebar = document.getElementById('sidebar');
+    const toggleSidebarBtn = document.getElementById('toggleSidebar');
+    const reopenSidebarBtn = document.getElementById('reopenSidebar');
+
+    toggleSidebarBtn?.addEventListener('click', () => {
+      sidebar.classList.toggle('hidden');
+      if (isMobile) {
+        if (sidebar.classList.contains('hidden')) {
+          reopenSidebarBtn.classList.remove('hidden');
+        } else {
+          reopenSidebarBtn.classList.add('hidden');
+        }
+      }
+    });
+
+    reopenSidebarBtn.addEventListener('click', () => {
+      sidebar.classList.remove('hidden');
+      reopenSidebarBtn.classList.add('hidden');
+    });
+
+    document.getElementById('hideUncracked').addEventListener('change', scheduleLoadData);
+    document.getElementById('hideEmptyBssid').addEventListener('change', scheduleLoadData);
+    document.getElementById('basemap').addEventListener('change', switchBase);
+    document.getElementById('btnSync').addEventListener('click', syncWpasec);
+
+    // Indice per focus dalla lista
+    const markerIndex = new Map();
+
+    // Icona
+    const ICON_PX = 42, VB = 64, BASE_BOTTOM_VB = 52, SCALE = ICON_PX / VB, SPIDER_Y_TWEAK = -1;
+    const anchorX = Math.round((VB/2) * SCALE);
+    const anchorY = Math.round(BASE_BOTTOM_VB * SCALE) + SPIDER_Y_TWEAK;
+    function routerIcon(status) {
+      const color = status === "cracked" ? "#22c55e" : "#ef4444";
+      const glow  = status === "cracked" ? "drop-shadow(0 0 8px rgba(34,197,94,.35))"
+                                         : "drop-shadow(0 0 6px rgba(239,68,68,.25))";
+      return L.divIcon({
+        className: "custom-icon",
+        html: `
+          <svg xmlns="http://www.w3.org/2000/svg" width="${ICON_PX}" height="${ICON_PX}" viewBox="0 0 ${VB} ${VB}" style="filter:${glow}">
+            <rect x="14" y="40" width="36" height="12" rx="3" fill="${color}" opacity=".95"/>
+            <circle cx="22" cy="46" r="2" fill="#0b0f17"/>
+            <circle cx="30" cy="46" r="2" fill="#0b0f17"/>
+            <circle cx="38" cy="46" r="2" fill="#0b0f17"/>
+            <rect x="30" y="34" width="4" height="8" rx="1" fill="${color}" />
+            <g class="animate-wifi" transform="translate(32,28)">
+              <path class="wifi-arc arc1" d="M-6,6 A8,8 0 0 1 6,6" fill="none" stroke="${color}" stroke-width="2"/>
+              <path class="wifi-arc arc2" d="M-10,2 A12,12 0 0 1 10,2" fill="none" stroke="${color}" stroke-width="2"/>
+              <path class="wifi-arc arc3" d="M-14,-2 A16,16 0 0 1 14,-2" fill="none" stroke="${color}" stroke-width="2"/>
+            </g>
+          </svg>`,
+        iconSize: [ICON_PX, ICON_PX],
+        iconAnchor: [anchorX, anchorY],
+        popupAnchor: [0, -Math.round(ICON_PX * 0.9)]
+      });
+    }
+
+    // Lista recenti
+    function renderRecentList(features, maxItems = 30) {
+      const list = document.getElementById('recentList');
+      const count = document.getElementById('recentCount');
+      list.innerHTML = "";
+
+      const items = features.slice(0, maxItems);
+      count.textContent = items.length ? `${items.length} elementi` : "0";
+
+      for (const f of items) {
+        const p = f.properties || {};
+        const ssid  = (p.ssid || "").trim() || "(no SSID)";
+        const bssid = (p.bssid || "").trim() || "—";
+        const when  = [p.date || "", p.time || ""].filter(Boolean).join(" ");
+        const isCracked = !!(p.password && p.password.trim() !== "");
+        const statusBadge = isCracked
+          ? `<span class="badge bg-green-600/30 text-green-300 border border-green-600/50">cracked</span>`
+          : `<span class="badge bg-red-600/20 text-red-300 border border-red-600/40">unknown</span>`;
+
+        const div = document.createElement('div');
+        div.className = "recent-item px-3 py-2 cursor-pointer border-b border-gray-700/50";
+        div.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div class="truncate"><span class="text-gray-100">${ssid}</span></div>
+            ${statusBadge}
+          </div>
+          <div class="text-xs text-gray-400 mt-0.5">BSSID: <span class="font-mono">${bssid}</span></div>
+          <div class="text-xs text-gray-500">${when}</div>
+        `;
+        div.addEventListener('click', () => focusFeature(f));
+        list.appendChild(div);
+      }
+    }
+
+    function focusFeature(f) {
+      const id = f.properties?.id;
+      const entry = markerIndex.get(id);
+      if (!entry) return;
+      const target = entry.marker._origLatLng || entry.marker.getLatLng(); // usa coordinate reali
+      markers.zoomToShowLayer(entry.marker, () => {
+        map.setView(target, Math.max(map.getZoom(), 17), { animate: true });
+        entry.marker.openPopup();
+      });
+    }
+
+    // BBOX FETCH + debounce
+    let loadTimer = null;
+    function scheduleLoadData() {
+      // non ricaricare mentre: popup aperto, si trascina, spider aperto, o timeout post-apertura
+      if (activePopupMarker || isDragging || currentSpider || Date.now() < suspendLoadingUntil) return;
+      clearTimeout(loadTimer);
+      loadTimer = setTimeout(loadData, 250);
+    }
+    map.on('moveend', scheduleLoadData);
+    map.on('zoomend', scheduleLoadData);
+
+    async function loadData() {
+      const hideUncracked  = document.getElementById("hideUncracked").checked;
+      const hideEmptyBssid = document.getElementById("hideEmptyBssid").checked;
+
+      const b = map.getBounds();
+      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+      const zoom = map.getZoom();
+
+      statusEl.textContent = "Caricamento dati (viewport)…";
+      try {
+        const r = await fetch(`/api/networks/geojson?bbox=${encodeURIComponent(bbox)}&zoom=${zoom}`);
+        const data = await r.json();
+
+        markers.clearLayers();
+        markerIndex.clear();
+
+        const filtered = [];
+        const batch = [];
+
+        data.features.forEach(f => {
+          const props = f.properties || {};
+          const bssid = (props.bssid || "").trim();
+          const lat = f.geometry.coordinates[1], lon = f.geometry.coordinates[0];
+
+          // stato ricavato da presenza password
+          const isCracked = !!(props.password && props.password.trim() !== "");
+          if (hideUncracked && !isCracked) return;
+          if (hideEmptyBssid && !bssid) return;
+
+          const status = isCracked ? "cracked" : "unknown";
+          const origLatLng = L.latLng(lat, lon);
+          const m = L.marker(origLatLng, { icon: routerIcon(status) });
+          m._origLatLng = origLatLng; // salva coordinate reali per cerchio/centering
+
+          // popup: niente "Stato", mostra hash type/variant se presenti
+          const ssidTxt = (props.ssid || "").trim() || "(no SSID)";
+          const vendor  = (props.vendor || "").trim() || "-";
+          const ht      = (props.hash_type || "").trim();
+          const hv      = (props.hash_variant || "").trim();
+          const whenStr = [props.date || "", props.time || ""].filter(Boolean).join(" ");
+          const accuracy = typeof props.accuracy === 'number' ? props.accuracy : Number(props.accuracy || 0);
+
+          let hashHtml = "";
+          if (ht || hv) {
+            hashHtml = `<div class="mt-1 text-gray-300">Hash: <span class="font-mono">${ht || "-"}</span> / <span class="font-mono">${hv || "-"}</span></div>`;
+          }
+
+          const pwd = (props.password || "").trim();
+          let pwdHtml = "";
+          let pwdScriptNeeded = false;
+          let pid = `pwd-${props.id ?? Math.random().toString(36).slice(2)}`;
+
+          if (pwd) {
+            const obf = "•".repeat(Math.min(pwd.length, 24));
+            pwdHtml = `
+              <div class="mt-1">
+                <span class="text-gray-300">Password:</span>
+                <code id="${pid}" class="pwd-pill text-yellow-300 font-mono">${obf}</code>
+              </div>`;
+            pwdScriptNeeded = true;
+          } else {
+            pwdHtml = `
+              <div class="mt-1">
+                <span class="text-gray-300">Password:</span>
+                <span class="text-red-400 font-semibold">unknown</span>
+              </div>`;
+          }
+
+          m.bindPopup(`
+            <div class="text-sm">
+              <div class="font-semibold text-gray-100">${ssidTxt}</div>
+              <div class="mt-1 text-gray-300">BSSID: <span class="font-mono">${bssid || "-"}</span></div>
+              <div class="text-gray-300">Vendor: ${vendor}</div>
+              ${hashHtml}
+              ${pwdHtml}
+              <div class="text-xs text-gray-400 mt-2">${whenStr}</div>
+            </div>
+          `, { autoPan: !isMobile });
+
+          // apertura/chiusura popup: gestisci password e cerchio di accuratezza sulle coord reali
+          m.on('popupopen', async () => {
+            suspendLoadingUntil = Date.now() + 1200;
+            activePopupMarker = m;
+
+            // cerchio accuracy (metri), centrato su coordinate originali
+            if (accuracy && !Number.isNaN(accuracy) && accuracy > 0) {
+              if (m._accCircle) { try { map.removeLayer(m._accCircle); } catch(_){} }
+              m._accCircle = L.circle(m._origLatLng, {
+                radius: accuracy,           // metri
+                color: '#38bdf8',
+                fillColor: '#38bdf8',
+                fillOpacity: 0.12,
+                weight: 1
+              }).addTo(map);
+            }
+
+            if (pwdScriptNeeded) {
+              const code = document.getElementById(pid);
+              if (!code) return;
+              let revealed = false;
+              const obf = "•".repeat(Math.min(pwd.length, 24));
+              code.textContent = obf;
+              code.classList.remove('copied');
+
+              code.onclick = async () => {
+                if (!pwd) return;
+                if (!revealed) {
+                  revealed = true;
+                  code.textContent = pwd;
+                } else {
+                  try {
+                    await navigator.clipboard.writeText(pwd);
+                    const prev = code.textContent;
+                    code.classList.add('copied');
+                    code.textContent = "✅ Copiata";
+                    setTimeout(() => {
+                      code.classList.remove('copied');
+                      code.textContent = prev;
+                    }, 900);
+                  } catch {
+                    const prev = code.textContent;
+                    code.textContent = "⛔️ Clipboard bloccata";
+                    setTimeout(() => { code.textContent = prev; }, 1100);
+                  }
+                }
+              };
+            }
+          });
+
+          m.on('popupclose', () => {
+            if (activePopupMarker === m) activePopupMarker = null;
+            if (m._accCircle) {
+              try { map.removeLayer(m._accCircle); } catch(_) {}
+              m._accCircle = null;
+            }
+          });
+
+          batch.push(m);
+          if (props.id != null) markerIndex.set(props.id, { marker: m, latlng: origLatLng });
+          filtered.push(f);
+        });
+
+        markers.addLayers(batch);
+
+        statusEl.textContent = `Reti visualizzate: ${markers.getLayers().length} (viewport)`;
+        renderRecentList(filtered, 30);
+      } catch (e) {
+        statusEl.textContent = "Errore caricamento dati: " + e;
+        document.getElementById('recentList').innerHTML = "";
+        document.getElementById('recentCount').textContent = "0";
+      }
+    }
+
+    async function syncWpasec() {
+      statusEl.textContent = "Sync con WPA-SEC in corso...";
+      try {
+        const r = await fetch('/api/wpasec/sync', { method: 'POST' });
+        await r.text();
+        statusEl.textContent = "Sync completato. Ricarico dati…";
+        // evita di far sparire spider/popup durante sync
+        if (!activePopupMarker && !currentSpider && !isDragging) {
+          loadData();
+        }
+      } catch (e) {
+        statusEl.textContent = "Errore sync WPA-SEC: " + e;
+      }
+    }
+
+    function switchBase() {
+      const val = document.getElementById("basemap").value;
+      map.eachLayer(l => map.removeLayer(l));
+      map.addLayer(baseLayers[val]);
+      map.addLayer(markers);
+    }
+
+    // kickoff
+    loadData();
+  });
+  </script>
+</body>
+</html>
