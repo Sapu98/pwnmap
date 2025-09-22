@@ -6,8 +6,6 @@ Pwnmap is a Pwnagotchi plugin and a self-hosted map to visualize captured networ
 
 ## Preview
 
-Replace this image with a real screenshot or GIF showing the map UI.
-
 ![Pwnmap preview](raw.png)
 
 
