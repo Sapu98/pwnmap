@@ -8,8 +8,7 @@ Pwnmap is a Pwnagotchi plugin and a self-hosted map to visualize captured networ
 
 ![Pwnmap preview](raw.png)
 
-
-## Installation
+##Pwnmap Installation
 
 ```bash
 sudo apt update
@@ -34,3 +33,17 @@ python -m uvicorn backend.app:app --host 0.0.0.0 --port 1337
 visit http://127.0.0.1:1337 # replace 127.0.0.1 with whatever ip your machien is using
 
 #Optional but stronly suggested: use a reverse proxy such as Nginx to access your map and protect the server with apache2 password.
+
+##Plugin installation
+copy the plugin pwnamap_uploader.py from the repo folder to your pwnagotchi
+
+add the following lines to yout config.toml:
+
+main.plugins.pwnamap_uploader.enabled = true
+main.plugins.pwnamap_uploader.server_url = "https://(your ip)/api/upload"
+main.plugins.pwnamap_uploader.api_token = "SAME TOKEN AS IN THE .ENV"
+main.plugins.pwnamap_uploader.handshakes_dir = "/home/pi/handshakes/"
+main.plugins.pwnamap_uploader.interval_sec = 300
+main.plugins.pwnamap_uploader.faces = true
+
+sudo service pwnagotchi restart
