@@ -21,22 +21,31 @@ sudo apt install -y python3 python3-venv python3-pip git
 ### 2) Clone the repository
 ```bash
 cd /mnt/ssd
-git clone https://github.com/<your-user>/pwnmap.git
+git clone https://github.com/Sapu98/pwnmap
 cd pwnmap
 ```
 
 ### 3) Configure environment
-Create or edit the `.env` file in the project root and add your secrets. **Do not commit this file.**
+edit the `.env` file in the project root and add your secrets.
 
-Example `.env` (values censored):
+Example `.env`:
 ```env
-WPASEC_API_KEY=<REDACTED_WPASEC_KEY>
-DATABASE_URL=sqlite:////mnt/ssd/pwnmap/data/pwnmap.db
-# Add any other variables your app requires
+# Server
+PWNMAP_SERVER_BIND=0.0.0.0
+PWNMAP_SERVER_PORT=1337
+
+# Admin token (change this example on both the plugin and here)
+PWNMAP_AUTH_TOKEN=34545867945987356782315640385123
+
+# WPA-SEC
+PWNMAP_WPASEC_URL=https://wpa-sec.stanev.org
+PWNMAP_WPASEC_KEY=(YOUR KEY)
+
+# SQLite + data dir
+PWNMAP_DATA_DIR=data
+PWNMAP_DB_PATH=data/pwnmap.db
+PWNMAP_VENDOR_OUI_CSV=data/meta/vendor_oui.csv
 ```
-
-For systemd production use, create `/etc/pwnamap.env` (root-owned, chmod 600) with the same variables.
-
 ### 4) Create and activate virtual environment
 ```bash
 python3 -m venv .venv
@@ -47,8 +56,6 @@ source .venv/bin/activate
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
-# if there's no requirements file:
-pip install "uvicorn[standard]" fastapi
 ```
 
 ### 6) Run the backend (test)
@@ -68,7 +75,7 @@ Open in browser: `http://127.0.0.1:1337` (replace with your machine IP).
 ```toml
 main.plugins.pwnamap_uploader.enabled = true
 main.plugins.pwnamap_uploader.server_url = "https://<your-server-domain-or-ip>/api/upload"
-main.plugins.pwnamap_uploader.api_token = "<REDACTED_API_TOKEN>"
+main.plugins.pwnamap_uploader.api_token = "<API_TOKEN_FROM_ENV>"
 main.plugins.pwnamap_uploader.handshakes_dir = "/home/pi/handshakes/"
 main.plugins.pwnamap_uploader.interval_sec = 300
 main.plugins.pwnamap_uploader.faces = true
