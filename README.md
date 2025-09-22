@@ -20,7 +20,6 @@ sudo apt install -y python3 python3-venv python3-pip git
 
 ### 2) Clone the repository
 ```bash
-cd /mnt/ssd
 git clone https://github.com/Sapu98/pwnmap
 cd pwnmap
 ```
