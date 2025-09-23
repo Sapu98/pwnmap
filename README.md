@@ -1,6 +1,6 @@
 # 🗺️ Pwnmap
 
-Pwnmap is a **Pwnagotchi plugin** and a **self-hosted map** to visualize captured Wi-Fi networks.
+Pwnmap is a **Pwnagotchi plugin** and a **self-hosted map** to visualize captured Wi-Fi networks. It sycs data from wpa-sec to display your resolved handshakes.
 
 ---
 
